@@ -9,6 +9,7 @@ from PyPDF2 import PdfReader, PdfWriter
 import io
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -36,39 +37,49 @@ def upload_file():
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'}), 400
-        
+
         file = request.files['file']
         target_lang = request.form.get('language', 'en')
-        
+
         if file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
-            
+
         if not allowed_file(file.filename):
             return jsonify({'error': 'Invalid file type'}), 400
 
         # Read PDF content
         pdf_bytes = file.read()
-        
+
         # Convert PDF to images
         images = convert_from_bytes(pdf_bytes)
-        
+
         # Extract text using OCR
         extracted_text = ""
         for image in images:
             text = pytesseract.image_to_string(image)
             extracted_text += text + "\n"
 
-        # Translate text
+        # Create translator instance
         translator = Translator()
-        translated = translator.translate(extracted_text, dest=target_lang)
-        
+
+        # Create event loop for async translation
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Perform translation
+        try:
+            translated = loop.run_until_complete(translator.translate(extracted_text, dest=target_lang))
+            translated_text = translated.text
+        finally:
+            loop.close()
+
         # Create new PDF with translated text
         packet = io.BytesIO()
         can = canvas.Canvas(packet, pagesize=letter)
         y = 750  # Start from top
-        
+
         # Split translated text into lines and add to PDF
-        for line in translated.text.split('\n'):
+        for line in translated_text.split('\n'):
             if y > 50:  # Check if we need a new page
                 can.drawString(50, y, line)
                 y -= 15
@@ -77,22 +88,22 @@ def upload_file():
                 y = 750
                 can.drawString(50, y, line)
                 y -= 15
-        
+
         can.save()
-        
+
         # Create the response PDF
         packet.seek(0)
         new_pdf = PdfReader(packet)
-        
+
         # Create output PDF
         output = PdfWriter()
         output.add_page(new_pdf.pages[0])
-        
+
         # Save the output to a bytes buffer
         output_buffer = io.BytesIO()
         output.write(output_buffer)
         output_buffer.seek(0)
-        
+
         return send_file(
             output_buffer,
             as_attachment=True,
@@ -102,7 +113,7 @@ def upload_file():
 
     except Exception as e:
         logger.error(f"Error processing file: {str(e)}")
-        return jsonify({'error': 'Error processing file'}), 500
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
