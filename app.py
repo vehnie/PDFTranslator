@@ -4,7 +4,7 @@ from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 import pytesseract
 from pdf2image import convert_from_bytes
-from googletrans import Translator
+from googletrans import Translator, LANGUAGES
 from PyPDF2 import PdfReader, PdfWriter
 import io
 from reportlab.pdfgen import canvas
@@ -41,6 +41,10 @@ def upload_file():
         file = request.files['file']
         target_lang = request.form.get('language', 'en')
 
+        # Validate target language
+        if target_lang not in LANGUAGES:
+            return jsonify({'error': f'Unsupported target language: {target_lang}'}), 400
+
         if file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
 
@@ -49,6 +53,7 @@ def upload_file():
 
         # Read PDF content
         pdf_bytes = file.read()
+        logger.debug(f"Processing PDF for translation to {target_lang}")
 
         # Convert PDF to images
         images = convert_from_bytes(pdf_bytes)
@@ -59,6 +64,8 @@ def upload_file():
             text = pytesseract.image_to_string(image)
             extracted_text += text + "\n"
 
+        logger.debug(f"Extracted text length: {len(extracted_text)}")
+
         # Create translator instance
         translator = Translator()
 
@@ -68,8 +75,23 @@ def upload_file():
 
         # Perform translation
         try:
-            translated = loop.run_until_complete(translator.translate(extracted_text, dest=target_lang))
-            translated_text = translated.text
+            # Split text into smaller chunks if it's too long (googletrans has a limit)
+            max_chunk_size = 5000
+            text_chunks = [extracted_text[i:i+max_chunk_size] 
+                         for i in range(0, len(extracted_text), max_chunk_size)]
+
+            translated_chunks = []
+            for chunk in text_chunks:
+                translation = loop.run_until_complete(
+                    translator.translate(chunk, dest=target_lang))
+                translated_chunks.append(translation.text)
+
+            translated_text = ' '.join(translated_chunks)
+            logger.debug(f"Translation completed, length: {len(translated_text)}")
+
+        except Exception as translation_error:
+            logger.error(f"Translation error: {str(translation_error)}")
+            return jsonify({'error': f'Translation failed: {str(translation_error)}'}), 500
         finally:
             loop.close()
 
