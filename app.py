@@ -58,13 +58,13 @@ def upload_file():
         # Convert PDF to images
         images = convert_from_bytes(pdf_bytes)
 
-        # Extract text using OCR
-        extracted_text = ""
+        # Extract text using OCR for each page
+        pages_text = []
         for image in images:
             text = pytesseract.image_to_string(image)
-            extracted_text += text + "\n"
+            pages_text.append(text)
 
-        logger.debug(f"Extracted text length: {len(extracted_text)}")
+        logger.debug(f"Extracted text from {len(pages_text)} pages")
 
         # Create translator instance
         translator = Translator()
@@ -73,21 +73,24 @@ def upload_file():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        # Perform translation
+        # Translate each page
+        translated_pages = []
         try:
-            # Split text into smaller chunks if it's too long (googletrans has a limit)
-            max_chunk_size = 5000
-            text_chunks = [extracted_text[i:i+max_chunk_size] 
-                         for i in range(0, len(extracted_text), max_chunk_size)]
+            for page_text in pages_text:
+                # Split text into smaller chunks if it's too long
+                max_chunk_size = 5000
+                text_chunks = [page_text[i:i+max_chunk_size] 
+                             for i in range(0, len(page_text), max_chunk_size)]
 
-            translated_chunks = []
-            for chunk in text_chunks:
-                translation = loop.run_until_complete(
-                    translator.translate(chunk, dest=target_lang))
-                translated_chunks.append(translation.text)
+                translated_chunks = []
+                for chunk in text_chunks:
+                    translation = loop.run_until_complete(
+                        translator.translate(chunk, dest=target_lang))
+                    translated_chunks.append(translation.text)
 
-            translated_text = ' '.join(translated_chunks)
-            logger.debug(f"Translation completed, length: {len(translated_text)}")
+                translated_pages.append(' '.join(translated_chunks))
+
+            logger.debug(f"Translated {len(translated_pages)} pages")
 
         except Exception as translation_error:
             logger.error(f"Translation error: {str(translation_error)}")
@@ -95,31 +98,34 @@ def upload_file():
         finally:
             loop.close()
 
-        # Create new PDF with translated text
-        packet = io.BytesIO()
-        can = canvas.Canvas(packet, pagesize=letter)
-        y = 750  # Start from top
-
-        # Split translated text into lines and add to PDF
-        for line in translated_text.split('\n'):
-            if y > 50:  # Check if we need a new page
-                can.drawString(50, y, line)
-                y -= 15
-            else:
-                can.showPage()
-                y = 750
-                can.drawString(50, y, line)
-                y -= 15
-
-        can.save()
-
-        # Create the response PDF
-        packet.seek(0)
-        new_pdf = PdfReader(packet)
-
-        # Create output PDF
+        # Create output PDF with translated text
         output = PdfWriter()
-        output.add_page(new_pdf.pages[0])
+
+        # Create each page
+        for translated_text in translated_pages:
+            # Create new PDF page
+            packet = io.BytesIO()
+            can = canvas.Canvas(packet, pagesize=letter)
+            y = 750  # Start from top
+
+            # Split translated text into lines and add to PDF
+            for line in translated_text.split('\n'):
+                if y > 50:  # Check if we have space on current page
+                    can.drawString(50, y, line)
+                    y -= 15
+                else:
+                    # If we run out of space, create a new page
+                    can.showPage()
+                    y = 750
+                    can.drawString(50, y, line)
+                    y -= 15
+
+            can.save()
+
+            # Add page to output PDF
+            packet.seek(0)
+            new_pdf = PdfReader(packet)
+            output.add_page(new_pdf.pages[0])
 
         # Save the output to a bytes buffer
         output_buffer = io.BytesIO()
