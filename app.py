@@ -9,6 +9,9 @@ from PyPDF2 import PdfReader, PdfWriter
 import io
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 import asyncio
 
 # Configure logging
@@ -99,37 +102,40 @@ def upload_file():
             loop.close()
 
         # Create output PDF with translated text
-        output = PdfWriter()
-
-        # Create each page
-        for translated_text in translated_pages:
-            # Create new PDF page
-            packet = io.BytesIO()
-            can = canvas.Canvas(packet, pagesize=letter)
-            y = 750  # Start from top
-
-            # Split translated text into lines and add to PDF
-            for line in translated_text.split('\n'):
-                if y > 50:  # Check if we have space on current page
-                    can.drawString(50, y, line)
-                    y -= 15
-                else:
-                    # If we run out of space, create a new page
-                    can.showPage()
-                    y = 750
-                    can.drawString(50, y, line)
-                    y -= 15
-
-            can.save()
-
-            # Add page to output PDF
-            packet.seek(0)
-            new_pdf = PdfReader(packet)
-            output.add_page(new_pdf.pages[0])
-
-        # Save the output to a bytes buffer
         output_buffer = io.BytesIO()
-        output.write(output_buffer)
+        doc = SimpleDocTemplate(
+            output_buffer,
+            pagesize=letter,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=72
+        )
+
+        # Create styles
+        styles = getSampleStyleSheet()
+        normal_style = ParagraphStyle(
+            'CustomNormal',
+            parent=styles['Normal'],
+            fontSize=11,
+            leading=14,
+            spaceBefore=12,
+            spaceAfter=12
+        )
+
+        # Create the PDF content
+        pdf_content = []
+        for translated_text in translated_pages:
+            # Split text into paragraphs
+            paragraphs = translated_text.split('\n\n')
+            for para in paragraphs:
+                if para.strip():
+                    p = Paragraph(para.replace('\n', '<br/>'), normal_style)
+                    pdf_content.append(p)
+                    pdf_content.append(Spacer(1, 12))
+
+        # Build the PDF
+        doc.build(pdf_content)
         output_buffer.seek(0)
 
         return send_file(
